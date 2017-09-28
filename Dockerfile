@@ -1,4 +1,4 @@
-FROM jenkins:2.46.1
+FROM jenkins/jenkins:2.76-slim
 
 USER root
 RUN apt-get -qq update \

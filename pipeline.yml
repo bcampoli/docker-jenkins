@@ -1,0 +1,103 @@
+resources:
+
+- name: jenkins
+  type: docker-image
+  source:
+    repository: jenkins/jenkins
+
+- name: jenkins-logimethods
+  type: docker-image
+  source:
+    repository: logimethods/jenkins
+    username: ((docker-hub-username))
+    password: ((docker-hub-password))
+
+- name: github-repo-master
+  type: git
+  source:
+    uri: https://((github-username)):((github-password))@github.com/((github-repo-location))/((github-repo-name)).git
+    branch: master
+
+jobs:
+
+- name: push-to-github
+  plan:
+  - get: jenkins
+    trigger: true
+  - get: github-repo-master
+  - task: push-github
+    params:
+      GITHUB_EMAIL: ((github-email))
+      GITHUB_USERNAME: ((github-username))
+    config:
+      platform: linux
+      image_resource:
+        type: docker-image
+        source:
+          repository: helioncf/ubuntu1404-curl-git-jq-wget
+      inputs:
+      - name: github-repo-master
+      outputs:
+      - name: github-repo-modified
+      run:
+        path: bash
+        args:
+        - -exc
+        - |
+          url=https://hub.docker.com/v2/repositories/jenkins/jenkins/tags/
+
+          call=$(curl -s "$url")
+
+          num=$(echo "$call" |  jq ".results | length")
+
+          let max=$num-1
+
+          for i in $(seq 0 $max);
+            do
+                val=$(echo "$call" | jq ".results[$i].name"| tr -d '"')
+                if [ "$val" != "latest" ] ; then
+                  VERSION=$val
+                  break
+                fi
+          done
+          echo "$VERSION"
+
+          git config --global push.default simple
+          git config --global user.email "$GITHUB_EMAIL"
+          git config --global user.name "$GITHUB_USERNAME"
+
+          cd ./github-repo-master
+          git branch
+          git checkout master
+          cd ..
+
+          git clone ./github-repo-master ./github-repo-modified
+          ls -la
+
+          cd github-repo-modified
+          ls -la
+          git branch
+
+          chmod 777 Dockerfile
+          perl -pi -e "s|FROM jenkins/jenkins:[.^\S]+|FROM jenkins/jenkins:$VERSION|" Dockerfile
+
+          cat Dockerfile
+
+          echo "$VERSION" > tag
+          DATE=`date '+%Y-%m-%d %H:%M:%S'`
+          echo "$DATE" > last_updated
+
+          git add --all
+          git commit -a -m "Updated to jenkins/jenkins:${VERSION}, Date: $DATE"
+  - put: github-repo-master
+    params: {repository: github-repo-modified}
+
+
+- name: push-to-dockerhub
+  plan:
+  - get: jenkins-logimethods
+  - get: github-repo-master
+    passed: [push-to-github]
+    trigger: true
+  - put: jenkins-logimethods
+    params: {build: ./github-repo-master, tag: ./github-repo-master/tag}
